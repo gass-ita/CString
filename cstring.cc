@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cctype>
 #include <iostream>
+#include <vector>
+#include <cstdarg>
 
 // Constructors and Destructor
 String::String(int size)
@@ -24,6 +26,46 @@ String::~String()
 	free(str);
 }
 
+String::String(const char *fmt, ...) : String()
+{
+	if (!fmt)
+		return;
+
+	va_list args;
+
+	// 1. First pass: Determine how much space we need
+	va_start(args, fmt);
+	// Passing nullptr and 0 tells vsnprintf to just return the needed length
+	int needed = vsnprintf(nullptr, 0, fmt, args);
+	va_end(args);
+
+	if (needed < 0)
+		return; // Formatting error
+
+	// 2. Prepare the buffer
+	// Ensure we have enough room (needed + 1 for null terminator)
+	if (needed >= currSize)
+	{
+		char *temp = (char *)realloc(str, needed + 1);
+		if (temp)
+		{
+			str = temp;
+			currSize = needed + 1;
+		}
+		else
+		{
+			return; // Memory allocation failed
+		}
+	}
+
+	// 3. Second pass: Actually write the string
+	va_start(args, fmt);
+	vsnprintf(str, currSize, fmt, args);
+	va_end(args);
+
+	length = needed;
+}
+
 String::String(const String &other)
 {
 	currSize = other.currSize;
@@ -31,6 +73,8 @@ String::String(const String &other)
 	str = (char *)malloc(currSize);
 	memcpy(str, other.str, length + 1);
 }
+
+// String::String() {}
 
 // Output
 void String::Print() const
@@ -40,18 +84,51 @@ void String::Print() const
 }
 
 // Setters
+
+void String::Reserve(int newCapacity)
+{
+	// printf("Reserving new capacity: %d\n", newCapacity);
+	// 1. Safety check: we need at least 1 byte for a null terminator
+	if (newCapacity < 1)
+		newCapacity = 1;
+
+	// 2. If the new capacity is smaller than our string, we must truncate
+	// (newCapacity - 1) is the maximum index we can keep
+	if (newCapacity <= length)
+	{
+		length = newCapacity - 1;
+		// The null terminator will be placed after realloc
+	}
+
+	// 3. Perform the resize
+	char *temp = (char *)realloc(str, newCapacity);
+
+	if (temp)
+	{
+		str = temp;
+		currSize = newCapacity;
+
+		// 4. Ensure the string is correctly terminated at the new length
+		str[length] = '\0';
+	}
+	else
+	{
+		// realloc failed - we keep the old pointer and size
+		fprintf(stderr, "Error: Reserve failed to allocate %d bytes.\n", newCapacity);
+	}
+}
+
 void String::Set(int i, char c)
 {
-	while (i + 1 >= currSize)
+	if (i + 1 >= currSize)
 	{
-		char *tstr = (char *)realloc((void *)str, currSize * 2);
-		if (!tstr)
-		{
-			fprintf(stderr, "ERR: Unable to allocate memory!\n");
-			return;
-		}
-		this->str = tstr;
-		currSize = currSize * 2;
+		int newCap = currSize;
+		if (newCap == 0)
+			newCap = STRING_DEFAULT_SIZE;
+		while (i + 1 >= newCap)
+			newCap *= 2;
+
+		this->Reserve(newCap);
 	}
 
 	if (c == 0)
@@ -108,6 +185,28 @@ void String::Append(const String &s)
 void String::Append(const char *inputStr)
 {
 	Set(this->length, inputStr);
+}
+
+// Const appenders
+String String::Concat(char c) const
+{
+	String result = *this;
+	result.Append(c);
+	return result;
+}
+
+String String::Concat(const String &s) const
+{
+	String result = *this;
+	result.Append(s);
+	return result;
+}
+
+String String::Concat(const char *inputStr) const
+{
+	String result = *this;
+	result.Append(inputStr);
+	return result;
 }
 
 // Modifiers
@@ -207,35 +306,87 @@ void String::ToLower()
 	}
 }
 
-String *String::Split(char delimiter, int *count) const
+int String::Find(const String &s, int start) const
 {
-	*count = 0;
-	if (length == 0)
-		return nullptr;
+	if (start < 0 || start >= length)
+		return -1;
+	int sLen = s.GetLength();
+	if (sLen == 0)
+		return start; // Empty string is found at the starting index
 
-	// 1. Count how many segments we will have
-	int segments = 1;
+	for (int i = start; i <= length - sLen; i++)
+	{
+		int j;
+		for (j = 0; j < sLen; j++)
+		{
+			if (str[i + j] != s.GetChar(j))
+				break;
+		}
+		if (j == sLen)
+			return i; // Found a match
+	}
+	return -1; // No match found
+}
+
+bool String::StartsWith(const String &s) const
+{
+	int sLen = s.GetLength();
+	if (sLen > length)
+		return false;
+	for (int i = 0; i < sLen; i++)
+	{
+		if (str[i] != s.GetChar(i))
+			return false;
+	}
+	return true;
+}
+
+bool String::EndsWith(const String &s) const
+{
+	int sLen = s.GetLength();
+	if (sLen > length)
+		return false;
+	for (int i = 0; i < sLen; i++)
+	{
+		if (str[length - sLen + i] != s.GetChar(i))
+			return false;
+	}
+	return true;
+}
+
+int String::Count(char c) const
+{
+	int count = 0;
 	for (int i = 0; i < length; i++)
 	{
-		if (str[i] == delimiter)
-			segments++;
+		if (str[i] == c)
+			count++;
+	}
+	return count;
+}
+
+std::vector<String> String::Split(char delimiter) const
+{
+	std::vector<String> result;
+
+	if (length == 0)
+	{
+		return result; // Returns an empty vector
 	}
 
-	// 2. Allocate an array of String objects
-	// Note: This calls the default constructor for each element
-	String *result = new String[segments];
-
-	int currentSegment = 0;
 	String temp; // Temporary buffer for building each piece
 
 	for (int i = 0; i <= length; i++)
 	{
-		// If we hit the delimiter or the end of the string
+		// If we hit the delimiter or the null terminator (end of string)
 		if (str[i] == delimiter || str[i] == '\0')
 		{
-			result[currentSegment] = temp; // Requires the Assignment Operator!
+			// Use std::move to trigger your move assignment operator
+			// This is much faster than a deep copy!
+			result.push_back(std::move(temp));
+
+			// Reset temp for the next segment
 			temp.Flush();
-			currentSegment++;
 		}
 		else
 		{
@@ -243,7 +394,6 @@ String *String::Split(char delimiter, int *count) const
 		}
 	}
 
-	*count = segments;
 	return result;
 }
 
@@ -310,6 +460,54 @@ std::ostream &operator<<(std::ostream &os, const String &s)
 	if (s.str)
 		os << s.str;
 	return os;
+}
+
+/** * @brief Reads a single word from the stream.
+ * Skips leading whitespace, then reads until next whitespace.
+ */
+std::istream &operator>>(std::istream &is, String &s)
+{
+	s.Flush(); // Clear existing content
+	char c;
+
+	// Skip leading whitespace
+	while (is.get(c) && isspace(c))
+		;
+
+	if (is.eof())
+		return is;
+
+	// Read until we hit whitespace
+	do
+	{
+		if (isspace(c))
+		{
+			is.putback(c); // Put the whitespace back for the next read
+			break;
+		}
+		s.Append(c);
+	} while (is.get(c));
+
+	return is;
+}
+
+/** * @brief Reads a full line of text.
+ */
+std::istream &getline(std::istream &is, String &s, char delim)
+{
+	s.Flush();
+	char c;
+
+	while (is.get(c))
+	{
+		if (c == delim)
+		{
+			break; // Stop at delimiter, but don't put it back
+		}
+		s.Append(c);
+	}
+
+	return is;
 }
 
 // Implementation of + (Creates a NEW object)
@@ -379,4 +577,30 @@ bool String::operator==(const String &other) const
 bool String::operator<(const String &other) const
 {
 	return strcmp(str, other.str) < 0;
+}
+
+void String::PrintInfo() const
+{
+	printf("--- String Debug Info ---\n");
+	printf("Address:  %p\n", (void *)str);
+	printf("Length:   %d\n", length);
+	printf("Capacity: %d\n", currSize);
+
+	// Print first 10 characters
+	printf("Content:  \"");
+	for (int j = 0; j < 10 && j < length; j++)
+	{
+		// Handle non-printable characters or spaces visually
+		if (str[j] == ' ')
+			printf("[ ]");
+		else if (str[j] == '\0')
+			printf("\\0");
+		else
+			printf("%c", str[j]);
+	}
+
+	if (length > 10)
+		printf("...");
+	printf("\"\n");
+	printf("-------------------------\n");
 }
